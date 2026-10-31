@@ -1,0 +1,53 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const read = (file) => readFileSync(path.join(root, file), 'utf8');
+const sql = read('supabase/archive/migrations-pre-baseline-20261030/20261028030000_phase54_core_security_and_payment_code_range.sql');
+const phase53 = read('supabase/archive/migrations-pre-baseline-20261030/20261028020000_phase53_payment_fees_and_unique_codes.sql');
+const audit = read('supabase/PHASE54_READONLY_SECURITY_AUDIT.sql');
+
+test('Phase 54 safely replaces the Phase 53 RPC and does not create a duplicate signature', () => {
+  assert.match(phase53, /CREATE FUNCTION public\.create_topup_order\([\s\S]*?p_request_id uuid/);
+  assert.match(sql, /CREATE OR REPLACE FUNCTION public\.create_topup_order\([\s\S]*?p_request_id uuid/);
+  assert.doesNotMatch(sql, /CREATE FUNCTION public\.create_topup_order\(/);
+  assert.doesNotMatch(sql, /DROP FUNCTION public\.create_topup_order/);
+});
+
+test('Phase 54 allocates the complete inclusive Rp200-Rp999 range at most once per order', () => {
+  assert.match(sql, /FOR v_attempt IN 0\.\.799 LOOP/);
+  assert.match(sql, /v_unique_code := 200 \+ \(\(v_start_offset \+ v_attempt\) % 800\)/);
+  assert.match(sql, /IF NOT v_code_found THEN/);
+  assert.match(sql, /v_price \+ v_payment_fee \+ v_unique_code/);
+  assert.doesNotMatch(sql, /floor\(random\(\)\s*\*\s*301\)/);
+});
+
+test('zero selling-price packages are blocked until an Author sets a sale price', () => {
+  assert.match(sql, /IF NOT FOUND OR v_price IS NULL OR v_price <= 0 THEN/);
+});
+
+test('order creation remains authenticated and idempotent', () => {
+  assert.match(sql, /IF v_user_id IS NULL THEN/);
+  assert.match(sql, /p_request_id uuid/);
+  assert.match(sql, /pg_advisory_xact_lock\(hashtext\(v_user_id::text\), hashtext\(p_request_id::text\)\)/);
+  assert.match(sql, /REVOKE ALL ON FUNCTION public\.create_topup_order[\s\S]*FROM PUBLIC, anon/);
+  assert.match(sql, /GRANT EXECUTE ON FUNCTION public\.create_topup_order[\s\S]*TO authenticated/);
+});
+
+test('fees remain server-side and supported methods are allow-listed', () => {
+  for (const rule of ["WHEN 'qris' THEN 300", "WHEN 'seabank' THEN 1000", "WHEN 'dana' THEN 500", "WHEN 'gopay' THEN 500", "WHEN 'ovo' THEN 500", "WHEN 'shopeepay' THEN 500"]) {
+    assert.ok(sql.includes(rule), 'missing fee rule: ' + rule);
+  }
+  assert.match(sql, /p_payment_method NOT IN/);
+});
+
+test('security audit is read-only and covers RLS, policies, definer functions, and RPC grants', () => {
+  assert.match(audit, /relrowsecurity/);
+  assert.match(audit, /FROM pg_policies/);
+  assert.match(audit, /p\.prosecdef/);
+  assert.match(audit, /information_schema\.routine_privileges/);
+  assert.doesNotMatch(audit, /\b(INSERT|UPDATE|DELETE|ALTER|DROP|CREATE)\s+(TABLE|FUNCTION|POLICY|INDEX|TRIGGER|INTO)\b/i);
+});

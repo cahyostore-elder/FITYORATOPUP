@@ -1,0 +1,36 @@
+# Local Supabase CLI configuration for FITYORATOPUP.
+# This file does not link a project or contain credentials.
+project_id = "fityoratopup"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 17
+
+[db.migrations]
+enabled = true
+schema_paths = []
+
+[db.seed]
+enabled = false
+sql_paths = []
+
+[realtime]
+# Local-only setting. Production Realtime is not changed by this file.
+enabled = true
+
+[storage]
+enabled = true
+file_size_limit = "50MiB"
+
+[storage.buckets.payment-proofs]
+public = false
+file_size_limit = "5MiB"
+allowed_mime_types = ["image/jpeg", "image/png", "image/webp"]
